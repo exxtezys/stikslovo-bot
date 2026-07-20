@@ -701,12 +701,18 @@ async def error_handler(update: object, context: CallbackContext) -> None:
 
 def main() -> None:
     """Build and run the bot — auto-detects webhook (Render) vs polling (local)."""
-    asyncio.run(init_db())
+    print("Starting StickerBot v2...", flush=True)
+
+    try:
+        asyncio.run(init_db())
+        print("DB initialized", flush=True)
+    except Exception as e:
+        print(f"DB init failed: {e}", flush=True)
+        raise
 
     # Load cached AI words on startup
     if _AI_AVAILABLE:
         try:
-            from ai_words import get_cached_words as _load_cached
             import json
             cache_file = Path(__file__).parent / "ai_words_cache.json"
             if cache_file.exists():
@@ -716,6 +722,7 @@ def main() -> None:
         except Exception:
             pass
 
+    print(f"Building app with token: {config.BOT_TOKEN[:8]}...", flush=True)
     app = Application.builder().token(config.BOT_TOKEN).build()
 
     # ── Handlers ──
@@ -744,9 +751,15 @@ def main() -> None:
 
     # ── Start ──
     if config.RENDER:
-        # Webhook mode (Render.com)
-        webhook_url = config.WEBHOOK_URL.rstrip("/") + "/webhook"
-        logger.info("Starting in WEBHOOK mode on port %s", config.PORT)
+        webhook_url = config.WEBHOOK_URL
+        if not webhook_url:
+            print("ERROR: RENDER=true but WEBHOOK_URL is not set!", flush=True)
+            print("Add WEBHOOK_URL env var in Render dashboard → Environment", flush=True)
+            # Start anyway — Render needs port binding
+            webhook_url = "https://placeholder.set.your.webhook.url"
+
+        webhook_url = webhook_url.rstrip("/") + "/webhook"
+        print(f"Webhook mode: {webhook_url} on port {config.PORT}", flush=True)
         app.run_webhook(
             listen="0.0.0.0",
             port=config.PORT,
@@ -754,8 +767,7 @@ def main() -> None:
             drop_pending_updates=True,
         )
     else:
-        # Polling mode (local PC)
-        logger.info("StickerBot v2 started in POLLING mode. Press Ctrl+C to stop.")
+        print("Polling mode", flush=True)
         app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 
