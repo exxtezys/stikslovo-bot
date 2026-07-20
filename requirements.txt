@@ -1,4 +1,4 @@
-python-telegram-bot[job-queue]>=21.0
+python-telegram-bot[webhooks,job-queue]>=21.0
 aiosqlite>=0.20.0
 google-generativeai>=0.8.0
 groq>=0.9.0
