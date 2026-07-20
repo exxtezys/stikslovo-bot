@@ -1,0 +1,8 @@
+# StickerBot
+.env
+stickerbot.db
+ai_words_cache.json
+__pycache__/
+*.pyc
+*.pyo
+*.log
