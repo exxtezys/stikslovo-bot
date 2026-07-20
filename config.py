@@ -44,8 +44,7 @@ DB_PATH: str = os.environ.get("DB_PATH", str(ROOT_DIR / "stickerbot.db"))
 INLINE_CACHE_TIME: int = int(os.environ.get("INLINE_CACHE_TIME", "1"))
 LOG_LEVEL: str = os.environ.get("LOG_LEVEL", "INFO")
 
-# Validate on import
+# Validate on import — warn but don't crash (Render needs port binding)
 if not BOT_TOKEN:
-    raise RuntimeError(
-        "BOT_TOKEN is not set. Create a .env file with:\nBOT_TOKEN=your_token_here"
-    )
+    import sys
+    print("WARNING: BOT_TOKEN is not set! Bot won't work until configured.", file=sys.stderr)
