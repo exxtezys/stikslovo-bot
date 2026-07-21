@@ -322,17 +322,20 @@ async def handle_callback(update: Update, context: CallbackContext) -> None:
             sets = await get_user_sets(user_id)
             total = await get_user_sticker_count(user_id)
             if not sets and total == 0:
-                text = "📭 У тебя пока нет стикеров.\n\nОтправь мне любой стикер, чтобы начать!"
-            else:
-                lines = ["📊 <b>Твои стикеры:</b>\n"]
-                if sets:
-                    for s in sets:
-                        title = s.get("set_title") or s["set_name"]
-                        lines.append(
-                            f"• <b>{title}</b>: {s['total']} стикеров, "
-                            f"⭐{s['favorites'] or 0} избранных"
-                        )
-                lines.append(f"\nВсего: <b>{total}</b> стикеров")
+                await query.edit_message_text(
+                    "📭 У тебя пока нет стикеров.\n\nОтправь мне любой стикер, чтобы начать!",
+                    parse_mode="HTML", reply_markup=_back_button()
+                )
+                return
+            lines = ["📊 <b>Твои стикеры:</b>\n"]
+            if sets:
+                for s in sets:
+                    title = s.get("set_title") or s["set_name"]
+                    lines.append(
+                        f"• <b>{title}</b>: {s['total']} стикеров, "
+                        f"⭐{s['favorites'] or 0} избранных"
+                    )
+            lines.append(f"\nВсего: <b>{total}</b> стикеров")
             await query.edit_message_text(
                 "\n".join(lines), parse_mode="HTML", reply_markup=_back_button()
             )
