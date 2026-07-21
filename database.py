@@ -278,3 +278,19 @@ async def user_has_stickers_from_set(user_id: int, set_name: str) -> int:
         return row["cnt"] if row else 0
     finally:
         await db.close()
+
+
+async def get_favorite_stickers(user_id: int, limit: int = 50) -> list[dict]:
+    """Get all favorite stickers across all packs."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT file_id, emoji, file_unique_id, set_title, set_name "
+            "FROM stickers WHERE user_id = ? AND is_favorite = 1 "
+            "ORDER BY created_at DESC LIMIT ?",
+            (user_id, limit),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        await db.close()

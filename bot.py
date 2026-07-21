@@ -41,6 +41,7 @@ import config
 from database import (
     add_sticker,
     add_stickers_bulk,
+    get_favorite_stickers,
     get_pack_stickers,
     get_sticker,
     get_user_sets,
@@ -560,6 +561,53 @@ async def browse_pack(update: Update, context: CallbackContext) -> None:
     _track(user_id, sent.message_id)
 
 
+async def fav_list(update: Update, context: CallbackContext) -> None:
+    """/fav — show all favorite stickers across all packs."""
+    msg = update.message
+    user_id = msg.from_user.id
+
+    stickers = await get_favorite_stickers(user_id, limit=50)
+
+    if not stickers:
+        sent = await msg.reply_text(
+            "⭐ У тебя пока нет избранных стикеров.\n"
+            "Отправь мне любой стикер, чтобы добавить в избранное!",
+            parse_mode="HTML",
+        )
+        _track(user_id, sent.message_id)
+        return
+
+    total = len(stickers)
+    sent = await msg.reply_text(
+        f"⭐ <b>Избранные стикеры</b> — {total}\n\n"
+        f"Нажимай на стикер, чтобы убрать из избранного:",
+        parse_mode="HTML",
+    )
+    _track(user_id, sent.message_id)
+
+    for s in stickers:
+        emoji_display = s["emoji"] or "—"
+        pack_hint = f" ({s.get('set_title') or s.get('set_name') or '?'})" if s.get('set_name') else ""
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                f"🚫 Убрать{pack_hint}",
+                callback_data=f"{CB_FAV}{s['file_unique_id']}",
+            )
+        ]])
+        sent_sticker = await msg.reply_sticker(
+            sticker=s["file_id"],
+            reply_markup=keyboard,
+        )
+        _track(user_id, sent_sticker.message_id)
+
+    if total > 30:
+        sent = await msg.reply_text(
+            f"Показаны все {total} избранных стикеров.",
+            parse_mode="HTML",
+        )
+        _track(user_id, sent.message_id)
+
+
 async def import_set(update: Update, context: CallbackContext) -> None:
     """Manual import: /import SetName"""
     msg = update.message
@@ -796,6 +844,8 @@ def main() -> None:
     app.add_handler(CommandHandler("mysets", mysets))
     app.add_handler(CommandHandler("pack", browse_pack))
     app.add_handler(CommandHandler("import", import_set))
+    app.add_handler(CommandHandler("fav", fav_list))
+    app.add_handler(CommandHandler("favorites", fav_list))
     app.add_handler(CommandHandler("remove", remove_last))
     app.add_handler(CommandHandler("clear", clear_all))
 
