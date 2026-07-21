@@ -87,6 +87,15 @@ async def _cleanup(update: Update, context: CallbackContext, user_id: int, keep:
     _bot_msgs[user_id] = msgs[-keep:] if keep > 0 else []
 
 
+async def _auto_delete(bot, chat_id: int, message_id: int, delay: int = 10) -> None:
+    """Delete a bot message after `delay` seconds."""
+    await asyncio.sleep(delay)
+    try:
+        await bot.delete_message(chat_id, message_id)
+    except Exception:
+        pass
+
+
 def _track(user_id: int, msg_id: int) -> None:
     """Remember a message ID so it can be cleaned up later."""
     _bot_msgs.setdefault(user_id, []).append(msg_id)
@@ -216,7 +225,9 @@ async def handle_sticker(update: Update, context: CallbackContext) -> None:
     set_name = sticker.set_name or ""
 
     if not emoji:
-        await msg.reply_text("⚠️ У этого стикера нет эмодзи — пропускаю.")
+        sent = await msg.reply_text("⚠️ У этого стикера нет эмодзи — пропускаю.")
+        await msg.delete()
+        asyncio.create_task(_auto_delete(context.bot, msg.chat_id, sent.message_id, 5))
         return
 
     # Check if already in DB
@@ -243,6 +254,8 @@ async def handle_sticker(update: Update, context: CallbackContext) -> None:
                 parse_mode="HTML",
             )
         _track(user_id, sent.message_id)
+        await msg.delete()
+        asyncio.create_task(_auto_delete(context.bot, msg.chat_id, sent.message_id, 10))
         return
 
     # ── New sticker ──
@@ -278,6 +291,7 @@ async def handle_sticker(update: Update, context: CallbackContext) -> None:
             reply_markup=keyboard,
         )
         _track(user_id, sent.message_id)
+        await msg.delete()
         return
 
     # No set_name or pack already imported → save as favorite
@@ -297,6 +311,8 @@ async def handle_sticker(update: Update, context: CallbackContext) -> None:
         parse_mode="HTML",
     )
     _track(user_id, sent.message_id)
+    await msg.delete()
+    asyncio.create_task(_auto_delete(context.bot, msg.chat_id, sent.message_id, 10))
 
 
 async def handle_callback(update: Update, context: CallbackContext) -> None:
