@@ -762,7 +762,26 @@ async def inline_query(update: Update, _context: CallbackContext) -> None:
     user_id = query.from_user.id
 
     if not text:
-        await query.answer([], cache_time=config.INLINE_CACHE_TIME)
+        # Show all favorite stickers when no query
+        favs = await get_favorite_stickers(user_id, limit=50)
+        if not favs:
+            await query.answer(
+                [], cache_time=config.INLINE_CACHE_TIME,
+                switch_pm_text="⭐ Нет избранных. Отправь мне стикер!",
+                switch_pm_parameter="start",
+            )
+            return
+        fav_results = []
+        seen_favs: set[str] = set()
+        for row in favs:
+            fid = row["file_id"]
+            if fid in seen_favs:
+                continue
+            seen_favs.add(fid)
+            fav_results.append(InlineQueryResultCachedSticker(
+                id=fid[:64], sticker_file_id=fid,
+            ))
+        await query.answer(fav_results, cache_time=config.INLINE_CACHE_TIME, is_personal=True)
         return
 
     # Map query → matching emojis (static + AI)
