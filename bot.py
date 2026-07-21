@@ -67,6 +67,30 @@ except Exception:
 # Runtime AI word cache: emoji → [words]
 _ai_word_cache: dict[str, list[str]] = {}
 
+# ── Chat Cleanup ─────────────────────────────────────────────────────
+# Track bot's messages per user so we can delete old ones and keep chat clean.
+_bot_msgs: dict[int, list[int]] = {}  # user_id → [message_ids]
+
+
+async def _cleanup(update: Update, context: CallbackContext, user_id: int, keep: int = 0) -> None:
+    """Delete tracked bot messages for this user, optionally keeping the last N."""
+    if user_id not in _bot_msgs or not _bot_msgs[user_id]:
+        return
+    chat_id = update.effective_chat.id
+    msgs = _bot_msgs[user_id]
+    to_delete = msgs[:-keep] if keep > 0 else msgs
+    for mid in to_delete:
+        try:
+            await context.bot.delete_message(chat_id, mid)
+        except Exception:
+            pass
+    _bot_msgs[user_id] = msgs[-keep:] if keep > 0 else []
+
+
+def _track(user_id: int, msg_id: int) -> None:
+    """Remember a message ID so it can be cleaned up later."""
+    _bot_msgs.setdefault(user_id, []).append(msg_id)
+
 # ── Logging ──────────────────────────────────────────────────────────
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -158,18 +182,22 @@ CB_PACK = "pack:"
 
 # ── Handlers ─────────────────────────────────────────────────────────
 
-async def start(update: Update, _context: CallbackContext) -> None:
+async def start(update: Update, context: CallbackContext) -> None:
     """Welcome message with interactive menu."""
+    user_id = update.effective_user.id
     keyboard = _main_menu_keyboard()
     if update.message:
-        await update.message.reply_html(START_TEXT, reply_markup=keyboard)
+        # Clean up all old bot messages before showing menu
+        await _cleanup(update, context, user_id)
+        msg = await update.message.reply_html(START_TEXT, reply_markup=keyboard)
+        _track(user_id, msg.message_id)
     elif update.callback_query:
         await update.callback_query.edit_message_text(
             START_TEXT, parse_mode="HTML", reply_markup=keyboard
         )
 
 
-async def handle_sticker(update: Update, _context: CallbackContext) -> None:
+async def handle_sticker(update: Update, context: CallbackContext) -> None:
     """When user sends a sticker:
     - If new + has set_name → offer import whole pack
     - If new + no set_name → save as favorite
@@ -200,7 +228,7 @@ async def handle_sticker(update: Update, _context: CallbackContext) -> None:
         emoji_text = existing["emoji"]
         word_preview = _word_preview(emoji_text)
         if new_fav:
-            await msg.reply_text(
+            sent = await msg.reply_text(
                 f"⭐ <b>Избранное!</b>\n"
                 f"Эмодзи: {emoji_text}\n"
                 f"Слова: {word_preview}\n\n"
@@ -208,12 +236,13 @@ async def handle_sticker(update: Update, _context: CallbackContext) -> None:
                 parse_mode="HTML",
             )
         else:
-            await msg.reply_text(
+            sent = await msg.reply_text(
                 f"🚫 <b>Убрано из избранного.</b>\n"
                 f"Стикер больше не показывается в поиске.\n"
                 f"Отправь ещё раз — вернётся в избранное.",
                 parse_mode="HTML",
             )
+        _track(user_id, sent.message_id)
         return
 
     # ── New sticker ──
@@ -224,12 +253,15 @@ async def handle_sticker(update: Update, _context: CallbackContext) -> None:
 
         # Fetch pack info to show title & count
         try:
-            pack = await _context.bot.get_sticker_set(set_name)
+            pack = await context.bot.get_sticker_set(set_name)
             pack_title = pack.title
             pack_size = len(pack.stickers)
         except Exception:
             pack_title = set_name
             pack_size = "?"
+
+        # Clean up old import offers before showing new one
+        await _cleanup(update, context, user_id)
 
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton(
@@ -238,13 +270,14 @@ async def handle_sticker(update: Update, _context: CallbackContext) -> None:
             )],
             [InlineKeyboardButton("❌ Нет, спасибо", callback_data=f"{CB_IMPORT}skip:{set_name}")],
         ])
-        await msg.reply_text(
+        sent = await msg.reply_text(
             f"🎯 Этот стикер из пака <b>«{pack_title}»</b> ({pack_size} стикеров).\n\n"
             f"Импортировать весь пак? Стикеры сохранятся, но в поиске будут только те, "
             f"которые ты отметишь ⭐ избранными.",
             parse_mode="HTML",
             reply_markup=keyboard,
         )
+        _track(user_id, sent.message_id)
         return
 
     # No set_name or pack already imported → save as favorite
@@ -255,17 +288,18 @@ async def handle_sticker(update: Update, _context: CallbackContext) -> None:
     # Fire-and-forget AI word generation for this emoji
     _trigger_ai_words(emoji)
 
-    await msg.reply_text(
+    sent = await msg.reply_text(
         f"✅ <b>Стикер сохранён!</b> ⭐\n"
         f"Эмодзи: {emoji}\n"
         f"Слова: {word_preview}\n"
         f"Всего стикеров: {total}\n\n"
-        f"Попробуй: <code>@{_context.bot.username} {emoji}</code>",
+        f"Попробуй: <code>@{context.bot.username} {emoji}</code>",
         parse_mode="HTML",
     )
+    _track(user_id, sent.message_id)
 
 
-async def handle_callback(update: Update, _context: CallbackContext) -> None:
+async def handle_callback(update: Update, context: CallbackContext) -> None:
     """Handle inline keyboard button presses."""
     query = update.callback_query
     await query.answer()
@@ -277,7 +311,7 @@ async def handle_callback(update: Update, _context: CallbackContext) -> None:
         _ = data[len(CB_MENU):]
 
         if _ == "start":
-            await start(update, _context)
+            await start(update, context)
             return
         elif _ == "import":
             await query.edit_message_text(
@@ -336,7 +370,7 @@ async def handle_callback(update: Update, _context: CallbackContext) -> None:
         await query.edit_message_text(f"⏳ Импортирую пак «{set_name}»...")
 
         try:
-            sticker_set = await _context.bot.get_sticker_set(set_name)
+            sticker_set = await context.bot.get_sticker_set(set_name)
         except Exception as e:
             await query.edit_message_text(
                 f"❌ Ошибка при импорте пака: {e}", parse_mode="HTML"
@@ -408,7 +442,7 @@ async def handle_callback(update: Update, _context: CallbackContext) -> None:
         await query.answer(f"{status} {'Избранное' if new_fav else 'Убрано'}")
 
 
-async def mysets(update: Update, _context: CallbackContext) -> None:
+async def mysets(update: Update, context: CallbackContext) -> None:
     """Show all imported packs with stats."""
     user_id = update.message.from_user.id
     sets = await get_user_sets(user_id)
@@ -416,16 +450,17 @@ async def mysets(update: Update, _context: CallbackContext) -> None:
 
     if not sets:
         if total == 0:
-            await update.message.reply_text(
+            sent = await update.message.reply_text(
                 "📭 У тебя пока нет стикеров.\n"
                 "Отправь мне любой стикер, чтобы начать!"
             )
         else:
-            await update.message.reply_text(
+            sent = await update.message.reply_text(
                 f"📊 У тебя <b>{total}</b> стикеров (без пака).\n"
-                f"Используй: <code>@{_context.bot.username} слово</code>",
+                f"Используй: <code>@{context.bot.username} слово</code>",
                 parse_mode="HTML",
             )
+        _track(user_id, sent.message_id)
         return
 
     lines = [f"📊 <b>Твои стикер-паки:</b>\n"]
@@ -437,12 +472,13 @@ async def mysets(update: Update, _context: CallbackContext) -> None:
             f"<code>/pack {s['set_name']}</code>"
         )
     lines.append(f"\nВсего: <b>{total}</b> стикеров")
-    lines.append(f"Поиск: <code>@{_context.bot.username} слово</code>")
+    lines.append(f"Поиск: <code>@{context.bot.username} слово</code>")
 
-    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+    sent = await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+    _track(user_id, sent.message_id)
 
 
-async def browse_pack(update: Update, _context: CallbackContext) -> None:
+async def browse_pack(update: Update, context: CallbackContext) -> None:
     """Browse stickers in a pack with favorite toggles.
     Usage: /pack SetName"""
     msg = update.message
@@ -450,30 +486,28 @@ async def browse_pack(update: Update, _context: CallbackContext) -> None:
     args = msg.text.split(maxsplit=1)
 
     if len(args) < 2:
-        await msg.reply_text(
+        sent = await msg.reply_text(
             "📦 Укажи имя пака: <code>/pack ИмяПака</code>\n\n"
             "Список паков: <code>/mysets</code>",
             parse_mode="HTML",
         )
+        _track(user_id, sent.message_id)
         return
 
     set_name = args[1].strip()
     stickers = await get_pack_stickers(user_id, set_name)
 
     if not stickers:
-        await msg.reply_text(
+        sent = await msg.reply_text(
             f"❌ Пак <code>{set_name}</code> не найден или пуст.\n"
             f"Импортируй его: <code>/import {set_name}</code>",
             parse_mode="HTML",
         )
+        _track(user_id, sent.message_id)
         return
 
     fav_count = sum(1 for s in stickers if s["is_favorite"])
     total = len(stickers)
-    header = (
-        f"📦 <b>{set_name}</b> — {total} стикеров, ⭐{fav_count} избранных\n\n"
-        f"Нажимай на стикер, чтобы добавить/убрать из избранного:\n"
-    )
 
     # Send first batch (max 30 per message due to inline keyboard limits)
     batch = stickers[:30]
@@ -486,35 +520,38 @@ async def browse_pack(update: Update, _context: CallbackContext) -> None:
                 callback_data=f"{CB_FAV}{s['file_unique_id']}",
             )
         ]])
-        await msg.reply_sticker(
+        sent_sticker = await msg.reply_sticker(
             sticker=s["file_id"],
             reply_markup=keyboard,
         )
+        _track(user_id, sent_sticker.message_id)
 
     if len(stickers) > 30:
-        await msg.reply_text(
+        sent = await msg.reply_text(
             f"Показано 30 из {total} стикеров. "
             f"Пришли ещё раз <code>/pack {set_name}</code> для остальных.",
             parse_mode="HTML",
         )
     else:
-        await msg.reply_text(f"✅ Все {total} стикеров показаны. Нажимай ⭐ чтобы отметить избранные.")
+        sent = await msg.reply_text(f"✅ Все {total} стикеров показаны. Нажимай ⭐ чтобы отметить избранные.")
+    _track(user_id, sent.message_id)
 
 
-async def import_set(update: Update, _context: CallbackContext) -> None:
+async def import_set(update: Update, context: CallbackContext) -> None:
     """Manual import: /import SetName"""
     msg = update.message
     user_id = msg.from_user.id
     args = msg.text.split(maxsplit=1)
 
     if len(args) < 2:
-        await msg.reply_text(
+        sent = await msg.reply_text(
             "📦 <b>Импорт стикер-пака</b>\n\n"
             "Имя пака:\n<code>/import ИмяПака</code>\n\n"
             "Или ссылка:\n<code>/import https://t.me/addstickers/SetName</code>\n\n"
             "💡 <b>Проще:</b> отправь мне ОДИН стикер из пака — я сам предложу импорт.",
             parse_mode="HTML",
         )
+        _track(user_id, sent.message_id)
         return
 
     set_name = args[1].strip()
@@ -524,28 +561,31 @@ async def import_set(update: Update, _context: CallbackContext) -> None:
         set_name = set_name.split("/", 1)[1]
 
     try:
-        sticker_set = await _context.bot.get_sticker_set(set_name)
+        sticker_set = await context.bot.get_sticker_set(set_name)
     except Exception as e:
-        await msg.reply_text(
+        sent = await msg.reply_text(
             f"❌ Пак <code>{set_name}</code> не найден.\nОшибка: {e}",
             parse_mode="HTML",
         )
+        _track(user_id, sent.message_id)
         return
 
     stickers = sticker_set.stickers
     existing_count = await user_has_stickers_from_set(user_id, set_name)
 
     if existing_count >= len(stickers):
-        await msg.reply_text(
+        sent = await msg.reply_text(
             f"ℹ️ Пак <b>{sticker_set.title}</b> уже полностью импортирован ({len(stickers)} стикеров).",
             parse_mode="HTML",
         )
+        _track(user_id, sent.message_id)
         return
 
     status = await msg.reply_text(
         f"⏳ Импортирую <b>{sticker_set.title}</b> ({len(stickers)} стикеров)...",
         parse_mode="HTML",
     )
+    _track(user_id, status.message_id)
 
     entries: list[tuple[int, str, str, str, int, str]] = []
     for s in stickers:
