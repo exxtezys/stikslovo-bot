@@ -483,6 +483,8 @@ async def mysets(update: Update, context: CallbackContext) -> None:
                 parse_mode="HTML",
             )
         _track(user_id, sent.message_id)
+        await update.message.delete()
+        asyncio.create_task(_auto_delete(context.bot, update.message.chat.id, sent.message_id, 20))
         return
 
     lines = [f"📊 <b>Твои стикер-паки:</b>\n"]
@@ -499,6 +501,8 @@ async def mysets(update: Update, context: CallbackContext) -> None:
 
     sent = await update.message.reply_text("\n".join(lines), parse_mode="HTML")
     _track(user_id, sent.message_id)
+    await update.message.delete()
+    asyncio.create_task(_auto_delete(context.bot, update.message.chat.id, sent.message_id, 20))
 
 
 async def browse_pack(update: Update, context: CallbackContext) -> None:
@@ -515,6 +519,8 @@ async def browse_pack(update: Update, context: CallbackContext) -> None:
             parse_mode="HTML",
         )
         _track(user_id, sent.message_id)
+        await msg.delete()
+        asyncio.create_task(_auto_delete(context.bot, msg.chat.id, sent.message_id, 20))
         return
 
     set_name = args[1].strip()
@@ -527,11 +533,16 @@ async def browse_pack(update: Update, context: CallbackContext) -> None:
             parse_mode="HTML",
         )
         _track(user_id, sent.message_id)
+        await msg.delete()
+        asyncio.create_task(_auto_delete(context.bot, msg.chat.id, sent.message_id, 20))
         return
 
     fav_count = sum(1 for s in stickers if s["is_favorite"])
     total = len(stickers)
     pack_title = stickers[0].get("set_title") or set_name if stickers else set_name
+
+    # Delete the user's command message
+    await msg.delete()
 
     # Send first batch (max 30 per message due to inline keyboard limits)
     batch = stickers[:30]
@@ -559,6 +570,7 @@ async def browse_pack(update: Update, context: CallbackContext) -> None:
     else:
         sent = await msg.reply_text(f"✅ Все {total} стикеров показаны. Нажимай ⭐ чтобы отметить избранные.")
     _track(user_id, sent.message_id)
+    asyncio.create_task(_auto_delete(context.bot, msg.chat.id, sent.message_id, 30))
 
 
 async def fav_list(update: Update, context: CallbackContext) -> None:
@@ -575,15 +587,20 @@ async def fav_list(update: Update, context: CallbackContext) -> None:
             parse_mode="HTML",
         )
         _track(user_id, sent.message_id)
+        await msg.delete()
+        asyncio.create_task(_auto_delete(context.bot, msg.chat.id, sent.message_id, 20))
         return
 
     total = len(stickers)
+    await msg.delete()
+
     sent = await msg.reply_text(
         f"⭐ <b>Избранные стикеры</b> — {total}\n\n"
         f"Нажимай на стикер, чтобы убрать из избранного:",
         parse_mode="HTML",
     )
     _track(user_id, sent.message_id)
+    asyncio.create_task(_auto_delete(context.bot, msg.chat.id, sent.message_id, 30))
 
     for s in stickers:
         emoji_display = s["emoji"] or "—"
@@ -623,6 +640,8 @@ async def import_set(update: Update, context: CallbackContext) -> None:
             parse_mode="HTML",
         )
         _track(user_id, sent.message_id)
+        await msg.delete()
+        asyncio.create_task(_auto_delete(context.bot, msg.chat.id, sent.message_id, 20))
         return
 
     set_name = args[1].strip()
@@ -639,6 +658,8 @@ async def import_set(update: Update, context: CallbackContext) -> None:
             parse_mode="HTML",
         )
         _track(user_id, sent.message_id)
+        await msg.delete()
+        asyncio.create_task(_auto_delete(context.bot, msg.chat.id, sent.message_id, 20))
         return
 
     stickers = sticker_set.stickers
@@ -650,6 +671,8 @@ async def import_set(update: Update, context: CallbackContext) -> None:
             parse_mode="HTML",
         )
         _track(user_id, sent.message_id)
+        await msg.delete()
+        asyncio.create_task(_auto_delete(context.bot, msg.chat.id, sent.message_id, 20))
         return
 
     status = await msg.reply_text(
@@ -657,6 +680,7 @@ async def import_set(update: Update, context: CallbackContext) -> None:
         parse_mode="HTML",
     )
     _track(user_id, status.message_id)
+    await msg.delete()
 
     entries: list[tuple[int, str, str, str, int, str, str]] = []
     pack_title = sticker_set.title
@@ -678,6 +702,7 @@ async def import_set(update: Update, context: CallbackContext) -> None:
         f"⭐ Отметь избранные: <code>/pack {set_name}</code>",
         parse_mode="HTML",
     )
+    asyncio.create_task(_auto_delete(context.bot, msg.chat.id, status.message_id, 30))
 
 
 # ── Remove / Clear ───────────────────────────────────────────────────
@@ -692,30 +717,40 @@ async def track_sticker(update: Update, _context: CallbackContext) -> None:
         _last_sticker[msg.from_user.id] = msg.sticker.file_unique_id
 
 
-async def remove_last(update: Update, _context: CallbackContext) -> None:
+async def remove_last(update: Update, context: CallbackContext) -> None:
     """Remove last sticker."""
-    user_id = update.message.from_user.id
+    msg = update.message
+    user_id = msg.from_user.id
     if user_id not in _last_sticker:
-        await update.message.reply_text("⚠️ Нечего удалять. Сначала отправь стикер.")
+        sent = await msg.reply_text("⚠️ Нечего удалять. Сначала отправь стикер.")
+        await msg.delete()
+        asyncio.create_task(_auto_delete(context.bot, msg.chat.id, sent.message_id, 10))
         return
     file_unique_id = _last_sticker.pop(user_id)
     removed = await remove_sticker(user_id, file_unique_id)
     count = await get_user_sticker_count(user_id)
     if removed:
-        await update.message.reply_text(f"🗑 Стикер удалён. Осталось: {count}")
+        sent = await msg.reply_text(f"🗑 Стикер удалён. Осталось: {count}")
     else:
-        await update.message.reply_text("⚠️ Не найден.")
+        sent = await msg.reply_text("⚠️ Не найден.")
+    await msg.delete()
+    asyncio.create_task(_auto_delete(context.bot, msg.chat.id, sent.message_id, 10))
 
 
-async def clear_all(update: Update, _context: CallbackContext) -> None:
+async def clear_all(update: Update, context: CallbackContext) -> None:
     """Remove all stickers."""
-    user_id = update.message.from_user.id
+    msg = update.message
+    user_id = msg.from_user.id
     count = await get_user_sticker_count(user_id)
     if count == 0:
-        await update.message.reply_text("📭 Нечего удалять.")
+        sent = await msg.reply_text("📭 Нечего удалять.")
+        await msg.delete()
+        asyncio.create_task(_auto_delete(context.bot, msg.chat.id, sent.message_id, 10))
         return
     deleted = await remove_all_user_stickers(user_id)
-    await update.message.reply_text(f"🗑 Удалено <b>{deleted}</b> стикеров.", parse_mode="HTML")
+    sent = await msg.reply_text(f"🗑 Удалено <b>{deleted}</b> стикеров.", parse_mode="HTML")
+    await msg.delete()
+    asyncio.create_task(_auto_delete(context.bot, msg.chat.id, sent.message_id, 10))
 
 
 # ── Inline Query ─────────────────────────────────────────────────────
