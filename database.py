@@ -1,7 +1,7 @@
 """
 Async SQLite database layer for sticker-to-word indexing.
 Each user has their own set of indexed stickers.
-Schema v2: adds is_favorite + set_name columns with auto-migration.
+Schema v3: adds set_title column for human-readable pack names.
 """
 
 from __future__ import annotations
@@ -38,6 +38,7 @@ async def init_db() -> None:
                 emoji           TEXT NOT NULL DEFAULT '',
                 is_favorite     INTEGER NOT NULL DEFAULT 1,
                 set_name        TEXT NOT NULL DEFAULT '',
+                set_title       TEXT NOT NULL DEFAULT '',
                 created_at      TEXT NOT NULL DEFAULT (datetime('now')),
                 UNIQUE(user_id, file_unique_id)
             )
@@ -50,9 +51,10 @@ async def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_stickers_user_set ON stickers(user_id, set_name)"
         )
 
-        # Migration: add columns if missing (for DBs from v1)
+        # Migration: add columns if missing (for DBs from v1/v2)
         await _migrate_add_column(db, "stickers", "is_favorite", "INTEGER NOT NULL DEFAULT 1")
         await _migrate_add_column(db, "stickers", "set_name", "TEXT NOT NULL DEFAULT ''")
+        await _migrate_add_column(db, "stickers", "set_title", "TEXT NOT NULL DEFAULT ''")
 
         await db.commit()
     finally:
@@ -79,15 +81,16 @@ async def add_sticker(
     emoji: str,
     is_favorite: int = 1,
     set_name: str = "",
+    set_title: str = "",
 ) -> bool:
     """Insert a sticker. Returns True if new, False if duplicate."""
     db = await get_db()
     try:
         await db.execute(
             "INSERT OR IGNORE INTO stickers "
-            "(user_id, file_unique_id, file_id, emoji, is_favorite, set_name) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (user_id, file_unique_id, file_id, emoji, is_favorite, set_name),
+            "(user_id, file_unique_id, file_id, emoji, is_favorite, set_name, set_title) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (user_id, file_unique_id, file_id, emoji, is_favorite, set_name, set_title),
         )
         await db.commit()
         return db.total_changes > 0
@@ -96,17 +99,17 @@ async def add_sticker(
 
 
 async def add_stickers_bulk(
-    entries: list[tuple[int, str, str, str, int, str]]
+    entries: list[tuple[int, str, str, str, int, str, str]]
 ) -> int:
-    """Bulk-insert. Entry: (user_id, file_unique_id, file_id, emoji, is_favorite, set_name)."""
+    """Bulk-insert. Entry: (user_id, file_unique_id, file_id, emoji, is_favorite, set_name, set_title)."""
     if not entries:
         return 0
     db = await get_db()
     try:
         await db.executemany(
             "INSERT OR IGNORE INTO stickers "
-            "(user_id, file_unique_id, file_id, emoji, is_favorite, set_name) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "(user_id, file_unique_id, file_id, emoji, is_favorite, set_name, set_title) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             entries,
         )
         await db.commit()
@@ -202,12 +205,12 @@ async def get_user_sticker_count(user_id: int) -> int:
 
 
 async def get_user_sets(user_id: int) -> list[dict]:
-    """Return [{set_name, total, favorites}] per imported pack."""
+    """Return [{set_name, set_title, total, favorites}] per imported pack."""
     db = await get_db()
     try:
         cursor = await db.execute(
             """
-            SELECT set_name, COUNT(*) as total, SUM(is_favorite) as favorites
+            SELECT set_name, MAX(set_title) as set_title, COUNT(*) as total, SUM(is_favorite) as favorites
             FROM stickers WHERE user_id = ? AND set_name != ''
             GROUP BY set_name ORDER BY set_name
             """,
@@ -252,7 +255,7 @@ async def get_pack_stickers(
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT file_id, emoji, is_favorite, file_unique_id "
+            "SELECT file_id, emoji, is_favorite, file_unique_id, set_title "
             "FROM stickers WHERE user_id = ? AND set_name = ? "
             "ORDER BY id LIMIT ?",
             (user_id, set_name, limit),

@@ -248,10 +248,7 @@ async def handle_sticker(update: Update, context: CallbackContext) -> None:
     # ── New sticker ──
     # If it has a set_name and user hasn't imported this pack → offer import
     if set_name and await user_has_stickers_from_set(user_id, set_name) == 0:
-        # Save this single sticker as not-favorite for now
-        await add_sticker(user_id, file_unique_id, file_id, emoji, is_favorite=0, set_name=set_name)
-
-        # Fetch pack info to show title & count
+        # Fetch pack info first so we can store the title
         try:
             pack = await context.bot.get_sticker_set(set_name)
             pack_title = pack.title
@@ -259,6 +256,9 @@ async def handle_sticker(update: Update, context: CallbackContext) -> None:
         except Exception:
             pack_title = set_name
             pack_size = "?"
+
+        # Save this single sticker as not-favorite for now
+        await add_sticker(user_id, file_unique_id, file_id, emoji, is_favorite=0, set_name=set_name, set_title=pack_title)
 
         # Clean up old import offers before showing new one
         await _cleanup(update, context, user_id)
@@ -281,7 +281,7 @@ async def handle_sticker(update: Update, context: CallbackContext) -> None:
         return
 
     # No set_name or pack already imported → save as favorite
-    await add_sticker(user_id, file_unique_id, file_id, emoji, is_favorite=1, set_name=set_name)
+    await add_sticker(user_id, file_unique_id, file_id, emoji, is_favorite=1, set_name=set_name, set_title=set_name)
     total = await get_user_sticker_count(user_id)
     word_preview = _word_preview(emoji)
 
@@ -327,8 +327,9 @@ async def handle_callback(update: Update, context: CallbackContext) -> None:
                 lines = ["📊 <b>Твои стикеры:</b>\n"]
                 if sets:
                     for s in sets:
+                        title = s.get("set_title") or s["set_name"]
                         lines.append(
-                            f"• <b>{s['set_name']}</b>: {s['total']} стикеров, "
+                            f"• <b>{title}</b>: {s['total']} стикеров, "
                             f"⭐{s['favorites'] or 0} избранных"
                         )
                 lines.append(f"\nВсего: <b>{total}</b> стикеров")
@@ -378,11 +379,12 @@ async def handle_callback(update: Update, context: CallbackContext) -> None:
             return
 
         stickers = sticker_set.stickers
-        entries: list[tuple[int, str, str, str, int, str]] = []
+        pack_title = sticker_set.title
+        entries: list[tuple[int, str, str, str, int, str, str]] = []
         for s in stickers:
             entries.append((
                 user_id, s.file_unique_id, s.file_id,
-                s.emoji or "", 0, set_name,  # is_favorite=0 by default
+                s.emoji or "", 0, set_name, pack_title,
             ))
 
         added = await add_stickers_bulk(entries)
@@ -421,7 +423,7 @@ async def handle_callback(update: Update, context: CallbackContext) -> None:
             return
         fav_count = sum(1 for s in stickers if s["is_favorite"])
         await query.edit_message_text(
-            f"📦 <b>{set_name}</b> — {len(stickers)} стикеров, ⭐{fav_count} избранных\n\n"
+            f"📦 <b>{pack_title}</b> — {len(stickers)} стикеров, ⭐{fav_count} избранных\n\n"
             f"⬇️ <b>Отправляй стикеры из клавиатуры</b> чтобы отмечать ⭐ избранные\n"
             f"Или используй команду <code>/pack {set_name}</code> чтобы посмотреть каждый",
             parse_mode="HTML",
@@ -467,8 +469,9 @@ async def mysets(update: Update, context: CallbackContext) -> None:
     for s in sets:
         fav = s["favorites"] or 0
         t = s["total"]
+        title = s.get("set_title") or s["set_name"]
         lines.append(
-            f"• <b>{s['set_name']}</b>: {t} стикеров, ⭐{fav} избранных  "
+            f"• <b>{title}</b>: {t} стикеров, ⭐{fav} избранных  "
             f"<code>/pack {s['set_name']}</code>"
         )
     lines.append(f"\nВсего: <b>{total}</b> стикеров")
@@ -508,6 +511,7 @@ async def browse_pack(update: Update, context: CallbackContext) -> None:
 
     fav_count = sum(1 for s in stickers if s["is_favorite"])
     total = len(stickers)
+    pack_title = stickers[0].get("set_title") or set_name if stickers else set_name
 
     # Send first batch (max 30 per message due to inline keyboard limits)
     batch = stickers[:30]
@@ -587,11 +591,12 @@ async def import_set(update: Update, context: CallbackContext) -> None:
     )
     _track(user_id, status.message_id)
 
-    entries: list[tuple[int, str, str, str, int, str]] = []
+    entries: list[tuple[int, str, str, str, int, str, str]] = []
+    pack_title = sticker_set.title
     for s in stickers:
         entries.append((
             user_id, s.file_unique_id, s.file_id,
-            s.emoji or "", 0, set_name,
+            s.emoji or "", 0, set_name, pack_title,
         ))
 
     added = await add_stickers_bulk(entries)
